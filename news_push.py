@@ -16,7 +16,7 @@ FEEDS = [
     ("https://news.google.com/rss/search?q=%E4%B8%AD%E5%9B%BD+%E6%94%BF%E6%B2%BB+%E6%94%BF%E7%AD%96&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "政治", 3),
     ("https://news.google.com/rss/search?q=%E5%9B%BD%E9%99%85+%E5%9C%B0%E7%BC%98%E6%94%BF%E6%B2%BB+%E5%A4%96%E4%BA%A4&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "国际", 3),
     ("https://news.google.com/rss/search?q=%E4%B8%AD%E5%9B%BD+%E8%B4%A2%E7%BB%8F+%E5%AE%8F%E8%A7%82&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "财经", 3),
-    ("https://news.google.com/rss/search?q=%E7%8E%AF%E7%90%83+%E5%B8%82%E5%9C%BA+%E8%82%A1%E5%B8%82&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "金融", 2),
+    ("https://news.google.com/rss/search?q=%E5%A4%AE%E8%A1%8C+%E8%B4%A7%E5%B8%81%E6%94%BF%E7%AD%96+%E5%88%A9%E7%8E%87&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "金融", 3),
     ("https://news.google.com/rss/search?q=%E7%A7%91%E6%8A%80+AI+%E8%8A%AF%E7%89%87&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "科技", 2),
     ("https://news.google.com/rss/search?q=%E6%A5%BC%E5%B8%82+%E6%88%BF%E8%B4%B7+%E6%88%BF%E5%9C%B0%E4%BA%A7&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "房市", 2),
     ("https://news.google.com/rss/search?q=%E4%B8%AD%E5%9B%BD+%E4%BC%81%E4%B8%9A+%E5%88%B6%E9%80%A0%E4%B8%9A&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "企业", 2),
@@ -27,6 +27,7 @@ FEEDS = [
 
 MAX_ITEMS = 10
 MAX_AGE_SECONDS = 72 * 3600
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 
 def clean(value):
@@ -46,11 +47,17 @@ def parse_time(entry):
     return None
 
 
+def fetch_feed(url):
+    resp = requests.get(url, headers={"User-Agent": UA}, timeout=25)
+    resp.raise_for_status()
+    return feedparser.parse(resp.content)
+
+
 def fetch_items():
     items = {}
     for idx, (url, category, weight) in enumerate(FEEDS):
         try:
-            parsed = feedparser.parse(url)
+            parsed = fetch_feed(url)
         except Exception as exc:
             print(f"[feed error] {url}: {exc}", file=sys.stderr)
             continue
@@ -59,6 +66,12 @@ def fetch_items():
             continue
         for entry in parsed.entries[:15]:
             title = clean(entry.get("title"))
+            source = ""
+            source_obj = entry.get("source")
+            if isinstance(source_obj, dict):
+                source = clean(source_obj.get("title") or source_obj.get("value") or "")
+            if source:
+                title = re.sub(r"\s*[-–—|]\s*" + re.escape(source) + r"$", "", title).strip()
             if not title or len(title) < 4:
                 continue
             published = parse_time(entry)
@@ -76,6 +89,7 @@ def fetch_items():
                     "weight": weight,
                     "idx": idx,
                 }
+        time.sleep(0.4)
     return list(items.values())
 
 
@@ -143,11 +157,34 @@ def main():
             best[cat] = item
     selected = sorted(best.values(), key=lambda x: x["idx"])
 
-    if len(selected) < MAX_ITEMS:
-        used = {x["title"].lower() for x in selected}
-        rest = [x for x in items if x["title"].lower() not in used]
-        rest.sort(key=sort_key)
-        selected += rest[:MAX_ITEMS - len(selected)]
+    counts = {}
+    used = set()
+    for item in selected:
+        counts[item["category"]] = counts.get(item["category"], 0) + 1
+        used.add(item["title"].lower())
+
+    rest = sorted(items, key=sort_key)
+    for item in rest:
+        if len(selected) >= MAX_ITEMS:
+            break
+        if item["title"].lower() in used:
+            continue
+        if item["category"] not in counts:
+            selected.append(item)
+            counts[item["category"]] = 1
+            used.add(item["title"].lower())
+
+    for item in rest:
+        if len(selected) >= MAX_ITEMS:
+            break
+        if item["title"].lower() in used:
+            continue
+        if counts.get(item["category"], 0) >= 2:
+            continue
+        selected.append(item)
+        counts[item["category"]] = counts.get(item["category"], 0) + 1
+        used.add(item["title"].lower())
+
     selected = selected[:MAX_ITEMS]
 
     summaries = summarize(selected)
