@@ -12,15 +12,17 @@ SENDKEY = os.environ.get("SERVERCHAN_SENDKEY", "").strip()
 DRY_RUN = "--dry-run" in sys.argv
 
 FEEDS = [
-    ("https://news.google.com/rss/search?q=%E8%B4%A2%E7%BB%8F+%E4%B8%AD%E5%9B%BD&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "国内", 3),
+    ("https://news.google.com/rss/search?q=%E4%B8%AD%E5%9B%BD+%E8%B4%A2%E7%BB%8F&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "国内", 3),
     ("https://news.google.com/rss/search?q=%E4%B8%AD%E5%9B%BD+%E6%94%BF%E6%B2%BB+%E6%94%BF%E7%AD%96&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "国内", 3),
-    ("https://news.google.com/rss/search?q=Fed+OR+ECB+OR+central+bank+interest+rate&hl=en-US&gl=US&ceid=US:en", "国际", 3),
-    ("https://news.google.com/rss/search?q=geopolitics+OR+markets+OR+economy&hl=en-US&gl=US&ceid=US:en", "国际", 2),
-    ("http://feeds.bbci.co.uk/news/rss.xml", "国际", 1),
-    ("https://www.cnbc.com/id/100003114/device/rss/rss.html", "国际", 1),
+    ("https://news.google.com/rss/search?q=%E5%A4%AE%E8%A1%8C+%E4%BA%BA%E6%B0%91%E5%B8%81+%E8%82%A1%E5%B8%82&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "国内", 2),
+    ("https://news.google.com/rss/search?q=%E7%BE%8E%E8%81%94%E5%82%A8+%E5%88%A9%E7%8E%87+%E7%BE%8E%E5%85%83&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "国际", 3),
+    ("https://news.google.com/rss/search?q=%E6%AC%A7%E6%B4%B2%E5%A4%AE%E8%A1%8C+%E6%AC%A7%E6%B4%B2%E7%BB%8F%E6%B5%8E&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "国际", 3),
+    ("https://news.google.com/rss/search?q=%E5%9C%B0%E7%BC%98%E6%94%BF%E6%B2%BB+%E5%9B%BD%E9%99%85%E8%B4%B8%E6%98%93+%E5%8E%9F%E6%B2%B9&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "国际", 2),
 ]
 
 MAX_ITEMS = 10
+DOMESTIC_COUNT = 6
+INTERNATIONAL_COUNT = 4
 MAX_AGE_SECONDS = 72 * 3600
 
 
@@ -31,6 +33,28 @@ def clean(value):
     value = re.sub(r"<[^>]+>", " ", value)
     value = re.sub(r"\s+", " ", value)
     return value.strip()
+
+
+def is_mostly_english(text):
+    letters = [ch for ch in text if ch.isalpha()]
+    if not letters:
+        return False
+    ascii_count = sum(1 for ch in letters if ch.isascii())
+    return ascii_count / len(letters) >= 0.5
+
+
+def translate(text):
+    if not text or not is_mostly_english(text):
+        return text
+    try:
+        url = "https://translate.googleapis.com/translate_a/single"
+        resp = requests.get(url, params={"client": "gtx", "sl": "en", "tl": "zh-CN", "dt": "t", "q": text}, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        translated = "".join(seg[0] for seg in data[0] if seg and seg[0])
+        return translated if translated else text
+    except Exception:
+        return text
 
 
 def parse_time(entry):
@@ -68,6 +92,8 @@ def fetch_items():
             summary = clean(entry.get("summary") or entry.get("description"))
             if len(summary) > 180:
                 summary = summary[:180].rstrip() + "…"
+            title = translate(title)
+            summary = translate(summary)
             link = entry.get("link", "")
             key = title.lower()
             existing = items.get(key)
@@ -90,6 +116,12 @@ def sort_key(item):
     else:
         age = 999999.0
     return (-item["weight"], age)
+
+
+def pick(items, category, count):
+    chosen = [x for x in items if x["category"] == category]
+    chosen.sort(key=sort_key)
+    return chosen[:count]
 
 
 def format_markdown(items):
@@ -119,8 +151,12 @@ def main():
     if not items:
         print("no items fetched", file=sys.stderr)
         return 1
-    items.sort(key=sort_key)
-    selected = items[:MAX_ITEMS]
+    selected = pick(items, "国内", DOMESTIC_COUNT) + pick(items, "国际", INTERNATIONAL_COUNT)
+    if len(selected) < MAX_ITEMS:
+        used = {x["title"].lower() for x in selected}
+        rest = [x for x in items if x["title"].lower() not in used]
+        rest.sort(key=sort_key)
+        selected += rest[:MAX_ITEMS - len(selected)]
     md = format_markdown(selected)
     print(md)
     if DRY_RUN:
