@@ -22,4 +22,5 @@ jobs:
       - name: Push news to WeChat
         env:
           SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: python news_push.py
