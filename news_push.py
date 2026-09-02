@@ -25,6 +25,7 @@ FEEDS = [
     ("https://news.google.com/rss/search?q=%E5%9B%BD%E9%99%85%E8%B4%B8%E6%98%93+%E5%85%B3%E7%A8%8E+%E5%8E%9F%E6%B2%B9&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "贸易", 2),
 ]
 
+CATEGORY_ORDER = [c for _, c, _ in FEEDS]
 MAX_ITEMS = 10
 MAX_AGE_SECONDS = 72 * 3600
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -101,23 +102,35 @@ def sort_key(item):
     return (-item["weight"], age)
 
 
-def summarize(items):
+def build_candidates(items, per_category=3):
+    by_cat = {}
+    for item in items:
+        by_cat.setdefault(item["category"], []).append(item)
+    candidates = []
+    for cat in CATEGORY_ORDER:
+        group = sorted(by_cat.get(cat, []), key=sort_key)[:per_category]
+        candidates.extend(group)
+    return candidates
+
+
+def summarize_selection(items):
     if not DEEPSEEK_API_KEY:
         return None
     lines = "\n".join(f"{i}. {item['category']}：{item['title']}" for i, item in enumerate(items, 1))
     prompt = (
-        "你是资深新闻编辑，正在制作每日早报。请把下面每条新闻提炼成一段简洁的中文摘要，"
-        "突出最重要的数字、事实和影响，20-60字；不要重复新闻标题，不要写来源、作者或链接。\n"
-        "只输出与输入相同数量的行，每行一条摘要，顺序完全一致，不要编号、不要板块名。\n\n" + lines
+        "你是资深新闻编辑，正在制作每日早报。下面是从今天新闻中抓取的候选，每条格式为「板块：标题」。\n"
+        "任务：从中挑选最重要的10条；同一事件、同一家公司或同一主题只保留一条，选完后若不足10条用其他候选补足。\n"
+        "对每条写一句中文摘要，必须包含明确的结论、观点或影响（20-60字）；禁止只复述标题、只写话题而没有下文。\n"
+        "只输出10行，每行严格使用「板块：内容」格式，板块名沿用候选中的板块名，不要编号，不要输出其他文字。\n\n" + lines
     )
     payload = {
         "model": "deepseek-v4-pro",
         "messages": [
-            {"role": "system", "content": "你是专业的每日新闻简报编辑，文风简洁、信息密度高。"},
+            {"role": "system", "content": "你是专业的每日新闻简报编辑，文风简洁、信息密度高，注重提炼结论与影响。"},
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.3,
-        "max_tokens": 1500,
+        "temperature": 0.2,
+        "max_tokens": 2000,
     }
     try:
         resp = requests.post(
@@ -129,12 +142,54 @@ def summarize(items):
         resp.raise_for_status()
         data = resp.json()
         content = data["choices"][0]["message"]["content"].strip()
-        summaries = [re.sub(r"^\s*\d+[、\.\)\s]*", "", line).strip() for line in content.splitlines() if line.strip()]
-        if len(summaries) == len(items):
-            return summaries
+        result = []
+        for raw_line in content.splitlines():
+            line = re.sub(r"^\s*\d+[、\.\)\s]*", "", raw_line).strip()
+            if not line:
+                continue
+            m = re.match(r"^([^：:]{1,8})[：:](.+)$", line)
+            if m:
+                result.append({"category": m.group(1).strip(), "content": m.group(2).strip()})
+        if len(result) == MAX_ITEMS:
+            return result
     except Exception as exc:
         print(f"[summarize error] {exc}", file=sys.stderr)
     return None
+
+
+def select_fallback(items):
+    best = {}
+    for item in items:
+        cat = item["category"]
+        if cat not in best or sort_key(item) < sort_key(best[cat]):
+            best[cat] = item
+    selected = sorted(best.values(), key=lambda x: x["idx"])
+    counts = {}
+    used = set()
+    for item in selected:
+        counts[item["category"]] = counts.get(item["category"], 0) + 1
+        used.add(item["title"].lower())
+    rest = sorted(items, key=sort_key)
+    for item in rest:
+        if len(selected) >= MAX_ITEMS:
+            break
+        if item["title"].lower() in used:
+            continue
+        if item["category"] not in counts:
+            selected.append(item)
+            counts[item["category"]] = 1
+            used.add(item["title"].lower())
+    for item in rest:
+        if len(selected) >= MAX_ITEMS:
+            break
+        if item["title"].lower() in used:
+            continue
+        if counts.get(item["category"], 0) >= 2:
+            continue
+        selected.append(item)
+        counts[item["category"]] = counts.get(item["category"], 0) + 1
+        used.add(item["title"].lower())
+    return [{"category": item["category"], "content": item["title"]} for item in selected[:MAX_ITEMS]]
 
 
 def send(title, desp):
@@ -150,56 +205,20 @@ def main():
         print("no items fetched", file=sys.stderr)
         return 1
 
-    best = {}
-    for item in items:
-        cat = item["category"]
-        if cat not in best or sort_key(item) < sort_key(best[cat]):
-            best[cat] = item
-    selected = sorted(best.values(), key=lambda x: x["idx"])
+    candidates = build_candidates(items)
+    final = summarize_selection(candidates)
+    if not final:
+        final = select_fallback(items)
 
-    counts = {}
-    used = set()
-    for item in selected:
-        counts[item["category"]] = counts.get(item["category"], 0) + 1
-        used.add(item["title"].lower())
-
-    rest = sorted(items, key=sort_key)
-    for item in rest:
-        if len(selected) >= MAX_ITEMS:
-            break
-        if item["title"].lower() in used:
-            continue
-        if item["category"] not in counts:
-            selected.append(item)
-            counts[item["category"]] = 1
-            used.add(item["title"].lower())
-
-    for item in rest:
-        if len(selected) >= MAX_ITEMS:
-            break
-        if item["title"].lower() in used:
-            continue
-        if counts.get(item["category"], 0) >= 2:
-            continue
-        selected.append(item)
-        counts[item["category"]] = counts.get(item["category"], 0) + 1
-        used.add(item["title"].lower())
-
-    selected = selected[:MAX_ITEMS]
-
-    summaries = summarize(selected)
     now = datetime.now(timezone(timedelta(hours=8)))
     date_str = f"{now.month}月{now.day}日早"
-    lines = []
-    for i, item in enumerate(selected, 1):
-        if summaries and summaries[i - 1]:
-            content = summaries[i - 1]
-        else:
-            content = item["title"]
+    lines = [f"**{date_str}，读报时间：**", ""]
+    for i, entry in enumerate(final, 1):
+        content = entry["content"]
         if len(content) > 180:
             content = content[:180].rstrip() + "…"
-        lines.append(f"{i}、{item['category']}：{content}")
-    desp = "\n".join(lines)
+        lines.append(f"{i}、{entry['category']}：{content}")
+    desp = "\n\n".join(lines)
 
     print(desp)
     if DRY_RUN:
