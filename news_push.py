@@ -9,6 +9,7 @@ import feedparser
 import requests
 
 SENDKEY = os.environ.get("SERVERCHAN_SENDKEY", "").strip()
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
 DRY_RUN = "--dry-run" in sys.argv
 
 FEEDS = [
@@ -35,28 +36,6 @@ def clean(value):
     value = re.sub(r"<[^>]+>", " ", value)
     value = re.sub(r"\s+", " ", value)
     return value.strip()
-
-
-def is_mostly_english(text):
-    letters = [ch for ch in text if ch.isalpha()]
-    if not letters:
-        return False
-    ascii_count = sum(1 for ch in letters if ch.isascii())
-    return ascii_count / len(letters) >= 0.5
-
-
-def translate(text):
-    if not text or not is_mostly_english(text):
-        return text
-    try:
-        url = "https://translate.googleapis.com/translate_a/single"
-        resp = requests.get(url, params={"client": "gtx", "sl": "en", "tl": "zh-CN", "dt": "t", "q": text}, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        translated = "".join(seg[0] for seg in data[0] if seg and seg[0])
-        return translated if translated else text
-    except Exception:
-        return text
 
 
 def parse_time(entry):
@@ -87,7 +66,6 @@ def fetch_items():
                 age = max(0.0, time.time() - published.timestamp())
                 if age > MAX_AGE_SECONDS:
                     continue
-            title = translate(title)
             key = title.lower()
             existing = items.get(key)
             if existing is None or weight > existing["weight"]:
@@ -107,6 +85,49 @@ def sort_key(item):
     else:
         age = 999999.0
     return (-item["weight"], age)
+
+
+def summarize(items):
+    if not DEEPSEEK_API_KEY:
+        return None
+    lines = "\n".join(f"{i}. {item['category']}：{item['title']}" for i, item in enumerate(items, 1))
+    prompt = (
+        "你是资深新闻编辑，正在制作每日早报。请把下面每条新闻提炼成一段简洁的中文摘要，"
+        "突出最重要的数字、事实和影响，20-60字；不要重复新闻标题，不要写来源、作者或链接。\n"
+        "只输出与输入相同数量的行，每行一条摘要，顺序完全一致，不要编号、不要板块名。\n\n" + lines
+    )
+    payload = {
+        "model": "deepseek-v4-pro",
+        "messages": [
+            {"role": "system", "content": "你是专业的每日新闻简报编辑，文风简洁、信息密度高。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 1500,
+    }
+    try:
+        resp = requests.post(
+            "https://api.deepseek.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=90,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"].strip()
+        summaries = [re.sub(r"^\s*\d+[、\.\)\s]*", "", line).strip() for line in content.splitlines() if line.strip()]
+        if len(summaries) == len(items):
+            return summaries
+    except Exception as exc:
+        print(f"[summarize error] {exc}", file=sys.stderr)
+    return None
+
+
+def send(title, desp):
+    url = f"https://sctapi.ftqq.com/{SENDKEY}.send"
+    resp = requests.post(url, data={"title": title, "desp": desp}, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def main():
@@ -129,13 +150,17 @@ def main():
         selected += rest[:MAX_ITEMS - len(selected)]
     selected = selected[:MAX_ITEMS]
 
+    summaries = summarize(selected)
     now = datetime.now(timezone(timedelta(hours=8)))
     date_str = f"{now.month}月{now.day}日早"
     lines = []
     for i, item in enumerate(selected, 1):
-        content = item["title"]
-        if len(content) > 150:
-            content = content[:150].rstrip() + "…"
+        if summaries and summaries[i - 1]:
+            content = summaries[i - 1]
+        else:
+            content = item["title"]
+        if len(content) > 180:
+            content = content[:180].rstrip() + "…"
         lines.append(f"{i}、{item['category']}：{content}")
     desp = "\n".join(lines)
 
@@ -150,13 +175,6 @@ def main():
     result = send(f"{date_str}，读报时间", desp)
     print(result)
     return 0 if result.get("code") == 0 else 1
-
-
-def send(title, desp):
-    url = f"https://sctapi.ftqq.com/{SENDKEY}.send"
-    resp = requests.post(url, data={"title": title, "desp": desp}, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
 
 
 if __name__ == "__main__":
