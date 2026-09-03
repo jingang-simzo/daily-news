@@ -20,7 +20,7 @@ FEEDS = [
     ("https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "科技", 2),
 ]
 
-MAX_ITEMS = 10
+MAX_ITEMS = 20
 MAX_AGE_SECONDS = 96 * 3600
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
@@ -103,7 +103,7 @@ def sort_key(item):
     return (-item["weight"], age)
 
 
-def dedupe_titles(items, limit=60):
+def dedupe_titles(items, limit=80):
     seen = set()
     result = []
     for item in sorted(items, key=sort_key):
@@ -123,11 +123,11 @@ def summarize(titles):
     lines = "\n".join(f"{i}. {t}" for i, t in enumerate(titles, 1))
     prompt = (
         "你是资深新闻编辑，正在制作每日早报。下面是从今天新闻中抓到的标题（已去重）。\n"
-        "任务：从中挑选最重要的10条，覆盖尽量多样的板块（如政治、国际、军事、财经、金融、科技、房市、企业、灾害、社会、热议等），"
+        "任务：从中挑选最重要的15条左右（10到20条），覆盖尽量多样的板块（如政治、国际、军事、财经、金融、科技、房市、企业、灾害、社会、热议等），"
         "同一事件、同一家公司或同一主题只保留一条，并优先覆盖战争进展、天灾人祸、网上热议、重大政策与市场影响等公众关注热点。\n"
-        "为每条分配一个最合适的板块，并写2-3句中文摘要，约80-150字，内容详实，包含事件要点、关键数字或背景，以及明确的结论、观点或影响；"
+        "为每条分配一个最合适的板块，并写3-5句中文摘要，约120-220字，内容更详实，包含事件要点、关键数字或背景、前因后果，以及明确的结论、观点或影响；基于标题补充必要背景，但不要编造无法确定的具体数字或事实；"
         "禁止只复述标题、只写话题而没有下文。\n"
-        "只输出10行，每行严格使用「板块：内容」格式，不要编号，不要输出其他文字。\n\n" + lines
+        "只输出15行左右（10到20行），每行严格使用「板块：内容」格式，不要编号，不要输出其他文字。\n\n" + lines
     )
     payload = {
         "model": "deepseek-v4-pro",
@@ -136,7 +136,7 @@ def summarize(titles):
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.2,
-        "max_tokens": 3000,
+        "max_tokens": 5000,
     }
     try:
         resp = requests.post(
@@ -156,7 +156,7 @@ def summarize(titles):
             m = re.match(r"^([^：:]{1,8})[：:](.+)$", line)
             if m:
                 result.append({"category": m.group(1).strip(), "content": m.group(2).strip()})
-        if len(result) == MAX_ITEMS:
+        if 1 <= len(result) <= MAX_ITEMS:
             return result
     except Exception as exc:
         print(f"[summarize error] {exc}", file=sys.stderr)
@@ -200,8 +200,8 @@ def main():
     lines = [f"**{date_str}，读报时间：**", ""]
     for i, entry in enumerate(final, 1):
         content = entry["content"]
-        if len(content) > 220:
-            content = content[:220].rstrip() + "…"
+        if len(content) > 320:
+            content = content[:320].rstrip() + "…"
         lines.append(f"{i}、{entry['category']}：{content}")
     desp = "\n\n".join(lines)
 
