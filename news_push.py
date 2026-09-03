@@ -217,13 +217,13 @@ def dedupe_titles(items, limit=80):
 def summarize(items):
     if not DEEPSEEK_API_KEY:
         print("[summarize] DEEPSEEK_API_KEY is empty", file=sys.stderr)
-        return None
+        return None, "未检测到 DeepSeek 密钥"
     parts = []
     for i, item in enumerate(items, 1):
         line = f"{i}. {item['title']}"
         ctx = (item.get("ctx") or "").strip()
         if ctx:
-            line += f"\n[摘要] {ctx[:600]}"
+            line += f"\n[摘要] {ctx[:400]}"
         parts.append(line)
     lines = "\n".join(parts)
     prompt = (
@@ -263,10 +263,11 @@ def summarize(items):
             if m:
                 result.append({"category": m.group(1).strip(), "content": m.group(2).strip()})
         if result:
-            return result[:MAX_ITEMS]
+            return result[:MAX_ITEMS], None
+        return None, "模型返回内容无法解析"
     except Exception as exc:
         print(f"[summarize error] {exc}", file=sys.stderr)
-    return None
+        return None, f"接口调用失败：{str(exc)[:120]}"
 
 
 def fallback(items):
@@ -296,9 +297,9 @@ def main():
         print("no items fetched", file=sys.stderr)
         return 1
 
-    candidates = dedupe_titles(items, limit=45)
+    candidates = dedupe_titles(items, limit=40)
     enrich_items(candidates)
-    final = summarize(candidates)
+    final, summary_error = summarize(candidates)
     if not final:
         print("[warn] DeepSeek summary failed; using fallback title list", file=sys.stderr)
         final = fallback(items)
@@ -306,6 +307,9 @@ def main():
     now = datetime.now(timezone(timedelta(hours=8)))
     date_str = f"{now.month}月{now.day}日早"
     lines = [f"**{date_str}，读报时间：**", ""]
+    if summary_error:
+        lines.append(f"⚠️ {summary_error}，本次为标题列表")
+        lines.append("")
     for i, entry in enumerate(final, 1):
         content = entry["content"]
         if len(content) > 420:
