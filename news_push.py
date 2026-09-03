@@ -236,7 +236,7 @@ def summarize(items):
         "只输出15行左右（10到20行），每行严格使用「板块：内容」格式，不要编号，不要输出其他文字。\n\n" + lines
     )
     payload = {
-        "model": "deepseek-v4-pro",
+        "model": "deepseek-chat",
         "messages": [
             {"role": "system", "content": "你是专业的每日新闻简报编辑，文风简洁但信息密度高，用具体数字、事实和结论说话。"},
             {"role": "user", "content": prompt},
@@ -249,7 +249,7 @@ def summarize(items):
             "https://api.deepseek.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
             json=payload,
-            timeout=90,
+            timeout=180,
         )
         resp.raise_for_status()
         data = resp.json()
