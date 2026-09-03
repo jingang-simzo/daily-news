@@ -3,7 +3,10 @@ import sys
 import time
 import re
 import html
+import base64
 from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse
 
 import feedparser
 import requests
@@ -22,6 +25,8 @@ FEEDS = [
 
 MAX_ITEMS = 20
 MAX_AGE_SECONDS = 96 * 3600
+ENRICH_LIMIT = 30
+ENRICH_TIMEOUT = 8
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 
@@ -32,6 +37,97 @@ def clean(value):
     value = re.sub(r"<[^>]+>", " ", value)
     value = re.sub(r"\s+", " ", value)
     return value.strip()
+
+
+def decode_google_link(link):
+    match = re.search(r"/articles/([A-Za-z0-9_-]+)", link or "")
+    if not match:
+        return None
+    token = match.group(1)
+    try:
+        raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+    except Exception:
+        return None
+    try:
+        text = raw.decode("latin-1", errors="ignore")
+    except Exception:
+        return None
+    found = re.search(r"https?://[^\s\"'<>]+", text)
+    if not found:
+        return None
+    url = found.group(0).rstrip(")]}\"'")
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return url
+
+
+def extract_text(html_text):
+    if not html_text:
+        return ""
+    html_text = re.sub(r"(?is)<(script|style|noscript|iframe)[^>]*>.*?</\1>", " ", html_text)
+    paragraphs = re.findall(r"(?is)<p[^>]*>(.*?)</p>", html_text)
+    parts = []
+    for p in paragraphs:
+        p = clean(p)
+        if len(p) >= 15:
+            parts.append(p)
+    body = " ".join(parts)
+    if len(body) < 60:
+        meta = re.search(r'(?is)<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']+)', html_text)
+        if meta:
+            body = clean(meta.group(1))
+    return body
+
+
+def fetch_article_text(url):
+    if not url:
+        return ""
+    candidates = []
+    decoded = decode_google_link(url)
+    if decoded:
+        candidates.append(decoded)
+    candidates.append(url)
+    for candidate in candidates:
+        try:
+            resp = requests.get(candidate, headers={"User-Agent": UA, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.5"}, timeout=ENRICH_TIMEOUT, allow_redirects=True)
+            if resp.status_code != 200:
+                continue
+            final_url = resp.url or ""
+            if "news.google.com" in final_url:
+                continue
+            content_type = resp.headers.get("Content-Type", "")
+            if "text/html" not in content_type:
+                continue
+            if "charset" not in content_type.lower():
+                resp.encoding = resp.apparent_encoding or "utf-8"
+            text = extract_text(resp.text)
+            if text:
+                return text
+        except Exception:
+            continue
+    return ""
+
+
+def enrich_items(items, limit=ENRICH_LIMIT):
+    top = sorted(items, key=sort_key)[:limit]
+    def work(item):
+        url = decode_google_link(item.get("link") or "")
+        text = fetch_article_text(url)
+        return item.get("title"), text
+    ctx = {}
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(work, item) for item in top]
+        for future in as_completed(futures):
+            try:
+                title, text = future.result()
+            except Exception:
+                continue
+            if text:
+                ctx[title] = text
+    for item in items:
+        item["ctx"] = ctx.get(item["title"], "")
+    return items
 
 
 def parse_time(entry):
@@ -90,6 +186,7 @@ def fetch_items():
                     "published": published,
                     "weight": weight,
                     "idx": idx,
+                    "link": entry.get("link") or "",
                 }
         time.sleep(0.8)
     return list(items.values())
@@ -111,32 +208,40 @@ def dedupe_titles(items, limit=80):
         if key in seen:
             continue
         seen.add(key)
-        result.append(item["title"])
+        result.append(item)
         if len(result) >= limit:
             break
     return result
 
 
-def summarize(titles):
+def summarize(items):
     if not DEEPSEEK_API_KEY:
         return None
-    lines = "\n".join(f"{i}. {t}" for i, t in enumerate(titles, 1))
+    parts = []
+    for i, item in enumerate(items, 1):
+        line = f"{i}. {item['title']}"
+        ctx = (item.get("ctx") or "").strip()
+        if ctx:
+            line += f"\n[摘要] {ctx[:600]}"
+        parts.append(line)
+    lines = "\n".join(parts)
     prompt = (
-        "你是资深新闻编辑，正在制作每日早报。下面是从今天新闻中抓到的标题（已去重）。\n"
+        "你是资深新闻编辑，正在制作每日早报。下面是从今天新闻中抓到的标题（部分带正文摘要，已去重）。\n"
         "任务：从中挑选最重要的15条左右（10到20条），覆盖尽量多样的板块（如政治、国际、军事、财经、金融、科技、房市、企业、灾害、社会、热议等），"
         "同一事件、同一家公司或同一主题只保留一条，并优先覆盖战争进展、天灾人祸、网上热议、重大政策与市场影响等公众关注热点。\n"
-        "为每条分配一个最合适的板块，并写3-5句中文摘要，约120-220字，内容更详实，包含事件要点、关键数字或背景、前因后果，以及明确的结论、观点或影响；基于标题补充必要背景，但不要编造无法确定的具体数字或事实；"
-        "禁止只复述标题、只写话题而没有下文。\n"
+        "为每条分配一个最合适的板块，并写4-6句中文摘要，约160-280字。要求：优先使用[摘要]里的真实信息，写清具体数字或数据（如中签率、涨跌幅、指数点位、死亡或失踪人数、金额、日期等）、双方表态或会谈要点、事件起因经过结果，以及明确的结论、观点或影响；"
+        "若某条没有[摘要]，请用标题和常识把“这是什么事件、为什么重要、带来什么影响”讲清楚，但不得编造无法确定的具体数字或事实；"
+        "严禁只复述标题、只写话题而没有下文。\n"
         "只输出15行左右（10到20行），每行严格使用「板块：内容」格式，不要编号，不要输出其他文字。\n\n" + lines
     )
     payload = {
         "model": "deepseek-v4-pro",
         "messages": [
-            {"role": "system", "content": "你是专业的每日新闻简报编辑，文风简洁但信息密度高，注重提炼结论、背景与影响。"},
+            {"role": "system", "content": "你是专业的每日新闻简报编辑，文风简洁但信息密度高，用具体数字、事实和结论说话。"},
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.2,
-        "max_tokens": 5000,
+        "max_tokens": 8000,
     }
     try:
         resp = requests.post(
@@ -156,8 +261,8 @@ def summarize(titles):
             m = re.match(r"^([^：:]{1,8})[：:](.+)$", line)
             if m:
                 result.append({"category": m.group(1).strip(), "content": m.group(2).strip()})
-        if 1 <= len(result) <= MAX_ITEMS:
-            return result
+        if result:
+            return result[:MAX_ITEMS]
     except Exception as exc:
         print(f"[summarize error] {exc}", file=sys.stderr)
     return None
@@ -190,8 +295,9 @@ def main():
         print("no items fetched", file=sys.stderr)
         return 1
 
-    titles = dedupe_titles(items)
-    final = summarize(titles)
+    candidates = dedupe_titles(items, limit=45)
+    enrich_items(candidates)
+    final = summarize(candidates)
     if not final:
         final = fallback(items)
 
@@ -200,8 +306,8 @@ def main():
     lines = [f"**{date_str}，读报时间：**", ""]
     for i, entry in enumerate(final, 1):
         content = entry["content"]
-        if len(content) > 320:
-            content = content[:320].rstrip() + "…"
+        if len(content) > 420:
+            content = content[:420].rstrip() + "…"
         lines.append(f"{i}、{entry['category']}：{content}")
     desp = "\n\n".join(lines)
 
