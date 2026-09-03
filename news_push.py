@@ -15,6 +15,14 @@ SENDKEY = os.environ.get("SERVERCHAN_SENDKEY", "").strip()
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
 DRY_RUN = "--dry-run" in sys.argv
 
+SENDKEYS = []
+if SENDKEY:
+    SENDKEYS.append(SENDKEY)
+for key in os.environ.get("SERVERCHAN_SENDKEYS", "").replace("，", ",").split(","):
+    key = key.strip()
+    if key and key not in SENDKEYS:
+        SENDKEYS.append(key)
+
 FEEDS = [
     ("https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "综合", 3),
     ("https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "财经", 3),
@@ -285,10 +293,16 @@ def fallback(items):
 
 
 def send(title, desp):
-    url = f"https://sctapi.ftqq.com/{SENDKEY}.send"
-    resp = requests.post(url, data={"title": title, "desp": desp}, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+    results = []
+    for key in SENDKEYS:
+        url = f"https://sctapi.ftqq.com/{key}.send"
+        try:
+            resp = requests.post(url, data={"title": title, "desp": desp}, timeout=30)
+            resp.raise_for_status()
+            results.append(resp.json())
+        except Exception as exc:
+            results.append({"code": -1, "message": f"{key[:8]}...: {exc}"})
+    return results
 
 
 def main():
@@ -321,13 +335,13 @@ def main():
     if DRY_RUN:
         print("\n[dry-run] no message sent")
         return 0
-    if not SENDKEY:
-        print("SERVERCHAN_SENDKEY is not set", file=sys.stderr)
+    if not SENDKEYS:
+        print("no ServerChan send key configured", file=sys.stderr)
         return 1
 
-    result = send(f"{date_str}，读报时间", desp)
-    print(result)
-    return 0 if result.get("code") == 0 else 1
+    results = send(f"{date_str}，读报时间", desp)
+    print(results)
+    return 0 if any(r.get("code") == 0 for r in results) else 1
 
 
 if __name__ == "__main__":
