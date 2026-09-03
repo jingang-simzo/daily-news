@@ -216,6 +216,7 @@ def dedupe_titles(items, limit=80):
 
 def summarize(items):
     if not DEEPSEEK_API_KEY:
+        print("[summarize] DEEPSEEK_API_KEY is empty", file=sys.stderr)
         return None
     parts = []
     for i, item in enumerate(items, 1):
@@ -299,6 +300,7 @@ def main():
     enrich_items(candidates)
     final = summarize(candidates)
     if not final:
+        print("[warn] DeepSeek summary failed; using fallback title list", file=sys.stderr)
         final = fallback(items)
 
     now = datetime.now(timezone(timedelta(hours=8)))
