@@ -31,6 +31,11 @@ FEEDS = [
     ("https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "科技", 2),
 ]
 
+BACKUP_FEEDS = [
+    ("https://www.chinanews.com.cn/rss/scroll-news.xml", "国内", 2),
+    ("https://feeds.a.dj.com/rss/RSSMarketsMain.xml", "财经", 2),
+]
+
 MAX_ITEMS = 20
 MAX_AGE_SECONDS = 96 * 3600
 ENRICH_LIMIT = 30
@@ -164,7 +169,8 @@ def fetch_feed(url):
 
 def fetch_items():
     items = {}
-    for idx, (url, category, weight) in enumerate(FEEDS):
+    feeds = list(FEEDS)
+    for idx, (url, category, weight) in enumerate(feeds):
         try:
             parsed = fetch_feed(url)
         except Exception as exc:
@@ -197,6 +203,35 @@ def fetch_items():
                     "link": entry.get("link") or "",
                 }
         time.sleep(0.8)
+    # If Google News was unreachable, fall back to sources that work on most networks.
+    if len(items) < 10:
+        for idx, (url, category, weight) in enumerate(BACKUP_FEEDS, start=100):
+            try:
+                parsed = fetch_feed(url)
+            except Exception as exc:
+                print(f"[backup feed error] {url}: {exc}", file=sys.stderr)
+                continue
+            for entry in parsed.entries[:30]:
+                title = clean(entry.get("title"))
+                if not title or len(title) < 4:
+                    continue
+                published = parse_time(entry)
+                if published:
+                    age = max(0.0, time.time() - published.timestamp())
+                    if age > MAX_AGE_SECONDS:
+                        continue
+                key = title.lower()
+                existing = items.get(key)
+                if existing is None or weight > existing["weight"]:
+                    items[key] = {
+                        "title": title,
+                        "category": category,
+                        "published": published,
+                        "weight": weight,
+                        "idx": idx,
+                        "link": entry.get("link") or "",
+                    }
+            time.sleep(0.5)
     return list(items.values())
 
 
