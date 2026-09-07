@@ -153,17 +153,15 @@ def parse_time(entry):
 
 def fetch_feed(url):
     last_exc = None
-    for attempt in range(2):
-        try:
-            resp = requests.get(url, headers={"User-Agent": UA}, timeout=25)
-            resp.raise_for_status()
-            parsed = feedparser.parse(resp.content)
-            if parsed.entries:
-                return parsed
-            last_exc = Exception("empty feed")
-        except Exception as exc:
-            last_exc = exc
-        time.sleep(1.5)
+    try:
+        resp = requests.get(url, headers={"User-Agent": UA}, timeout=12)
+        resp.raise_for_status()
+        parsed = feedparser.parse(resp.content)
+        if parsed.entries:
+            return parsed
+        last_exc = Exception("empty feed")
+    except Exception as exc:
+        last_exc = exc
     raise last_exc or Exception("feed failed")
 
 
