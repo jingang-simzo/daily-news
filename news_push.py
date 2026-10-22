@@ -4,8 +4,11 @@ import time
 import re
 import html
 import base64
+import asyncio
+import json
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from urllib.parse import urlparse
 
 import feedparser
@@ -40,6 +43,10 @@ MAX_ITEMS = 20
 MAX_AGE_SECONDS = 96 * 3600
 ENRICH_LIMIT = 30
 ENRICH_TIMEOUT = 8
+VOICE = "zh-CN-XiaoxiaoNeural"
+SITE_DIR = Path("docs")
+KEEP_AUDIO = 20
+KEEP_ARCHIVE = 40
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 
@@ -338,6 +345,71 @@ def send(title, desp):
     return results
 
 
+def build_plain_text(date_str, items):
+    lines = [f"{date_str}，读报时间。"]
+    for i, entry in enumerate(items, 1):
+        lines.append(f"第{i}条，{entry['category']}。{entry['content']}")
+    return "\n".join(lines)
+
+
+def make_audio(text, path):
+    import edge_tts
+
+    async def run():
+        communicate = edge_tts.Communicate(text, VOICE, rate="+8%")
+        await asyncio.wait_for(communicate.save(str(path)), timeout=150)
+
+    asyncio.run(run())
+
+
+def prune(directory, keep, pattern="*"):
+    files = sorted(directory.glob(pattern), key=lambda p: p.name, reverse=True)
+    for old in files[keep:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
+def publish_site(now, date_str, items, desp):
+    data_dir = SITE_DIR / "data"
+    archive_dir = data_dir / "archive"
+    audio_dir = SITE_DIR / "audio"
+    for path in (data_dir, archive_dir, audio_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    day = now.strftime("%Y-%m-%d")
+    plain = build_plain_text(date_str, items)
+    audio_path = audio_dir / f"{day}.mp3"
+    audio_ok = False
+    if "--no-audio" not in sys.argv:
+        try:
+            make_audio(plain, audio_path)
+            audio_ok = audio_path.exists() and audio_path.stat().st_size > 1000
+        except Exception as exc:
+            print(f"[tts error] {exc}", file=sys.stderr)
+
+    payload = {
+        "date": day,
+        "title": f"{date_str}，读报时间",
+        "items": items,
+        "audio": f"audio/{day}.mp3" if audio_ok else "",
+        "text": plain,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2)
+    (data_dir / "latest.json").write_text(encoded, encoding="utf-8")
+    (archive_dir / f"{day}.json").write_text(encoded, encoding="utf-8")
+
+    days = sorted((p.stem for p in archive_dir.glob("*.json")), reverse=True)
+    (data_dir / "index.json").write_text(
+        json.dumps({"days": days}, ensure_ascii=False), encoding="utf-8"
+    )
+
+    prune(audio_dir, KEEP_AUDIO, "*.mp3")
+    prune(archive_dir, KEEP_ARCHIVE, "*.json")
+    print(f"[site] {day} audio={'yes' if audio_ok else 'no'} items={len(items)}")
+
+
 def main():
     items = fetch_items()
     if not items:
@@ -374,7 +446,14 @@ def main():
 
     results = send(f"{date_str}，读报时间", desp)
     print(results)
-    return 0 if any(r.get("code") == 0 for r in results) else 1
+    ok = any(r.get("code") == 0 for r in results)
+
+    try:
+        publish_site(now, date_str, final, desp)
+    except Exception as exc:
+        print(f"[site error] {exc}", file=sys.stderr)
+
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

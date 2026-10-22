@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e6b4f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="每日读报">
+<title>每日读报</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root {
+    --bg: #f6f4ef;
+    --panel: #ffffff;
+    --ink: #171614;
+    --muted: #6d6961;
+    --line: #e2ded4;
+    --accent: #0e6b4f;
+    --accent-soft: #e4f0ea;
+    --warm: #b07a24;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131312;
+      --panel: #1c1c1a;
+      --ink: #f2efe8;
+      --muted: #a09a8f;
+      --line: #2e2d29;
+      --accent: #4fbf94;
+      --accent-soft: #1d3a31;
+      --warm: #d6a45b;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+                 "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+    padding: 0 0 env(safe-area-inset-bottom);
+  }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 22px 18px 40px; }
+
+  header { margin-bottom: 18px; }
+  .eyebrow {
+    font-size: 12px; letter-spacing: .18em; color: var(--muted);
+    text-transform: uppercase; margin-bottom: 6px;
+  }
+  h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; font-weight: 700; }
+  .meta { font-size: 14px; color: var(--muted); }
+
+  .daybar { display: flex; gap: 10px; align-items: center; margin: 14px 0 18px; }
+  select {
+    flex: 1; appearance: none; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; font-size: 15px; font-family: inherit;
+  }
+  .today-btn {
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    border-radius: 10px; padding: 12px 14px; font-size: 14px; font-family: inherit;
+  }
+  .today-btn:active { background: var(--accent-soft); }
+
+  .player {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 20px 18px 16px; margin-bottom: 22px;
+  }
+  .play-row { display: flex; align-items: center; justify-content: center; margin-bottom: 16px; }
+  .play {
+    width: 92px; height: 92px; border-radius: 50%; border: none;
+    background: var(--accent); color: #fff; display: grid; place-items: center;
+    cursor: pointer; transition: transform .12s ease;
+  }
+  .play:active { transform: scale(.95); }
+  .play svg { width: 38px; height: 38px; }
+  .play.loading { opacity: .7; }
+
+  .bar { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .times {
+    flex: 0 0 auto; white-space: nowrap;
+    font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  input[type="range"] {
+    -webkit-appearance: none; appearance: none; flex: 1 1 auto; min-width: 0;
+    width: auto; height: 26px;
+    background: transparent; margin: 0;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 5px; border-radius: 3px; background: var(--line);
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--accent); margin-top: -8.5px; border: none;
+  }
+  input[type="range"]::-moz-range-track { height: 5px; border-radius: 3px; background: var(--line); }
+  input[type="range"]::-moz-range-thumb { width: 22px; height: 22px; border: none; border-radius: 50%; background: var(--accent); }
+
+  .speeds { display: flex; gap: 8px; margin-top: 10px; }
+  .speeds button {
+    flex: 1; border: 1px solid var(--line); background: transparent; color: var(--muted);
+    border-radius: 9px; padding: 9px 0; font-size: 14px; font-family: inherit;
+  }
+  .speeds button[aria-pressed="true"] {
+    background: var(--accent-soft); color: var(--accent);
+    border-color: var(--accent); font-weight: 600;
+  }
+  .hint { font-size: 13px; color: var(--warm); margin: 12px 0 0; min-height: 0; }
+
+  h2 {
+    font-size: 13px; letter-spacing: .14em; color: var(--muted);
+    text-transform: uppercase; margin: 0 0 12px; font-weight: 600;
+  }
+  ol.items { list-style: none; margin: 0; padding: 0; }
+  ol.items li {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px 16px; margin-bottom: 10px;
+  }
+  .cat {
+    display: inline-block; font-size: 12px; color: var(--accent);
+    background: var(--accent-soft); border-radius: 6px;
+    padding: 2px 8px; margin-bottom: 8px;
+  }
+  .txt { font-size: 16px; line-height: 1.7; margin: 0; }
+  .empty { color: var(--muted); font-size: 15px; padding: 24px 0; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">每日读报</div>
+    <h1 id="dayTitle">加载中…</h1>
+    <div class="meta" id="dayMeta"></div>
+  </header>
+
+  <div class="daybar">
+    <select id="daySelect" aria-label="选择日期"></select>
+    <button class="today-btn" id="todayBtn" type="button">今天</button>
+  </div>
+
+  <section class="player">
+    <div class="play-row">
+      <button class="play" id="playBtn" type="button" aria-label="播放">
+        <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M8 5.5v13a1 1 0 0 0 1.53.85l10-6.5a1 1 0 0 0 0-1.7l-10-6.5A1 1 0 0 0 8 5.5z"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="bar">
+      <span class="times" id="curTime">0:00</span>
+      <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="播放进度">
+      <span class="times" id="durTime">--:--</span>
+    </div>
+
+    <div class="speeds" id="speeds">
+      <button type="button" data-rate="1" aria-pressed="true">1.0×</button>
+      <button type="button" data-rate="1.25" aria-pressed="false">1.25×</button>
+      <button type="button" data-rate="1.5" aria-pressed="false">1.5×</button>
+    </div>
+    <p class="hint" id="hint"></p>
+  </section>
+
+  <h2>本期内容</h2>
+  <ol class="items" id="items"></ol>
+</div>
+
+<audio id="audio" preload="metadata" playsinline></audio>
+
+<script>
+(() => {
+  const audio = document.getElementById('audio');
+  const playBtn = document.getElementById('playBtn');
+  const playIcon = document.getElementById('playIcon');
+  const seek = document.getElementById('seek');
+  const curTime = document.getElementById('curTime');
+  const durTime = document.getElementById('durTime');
+  const dayTitle = document.getElementById('dayTitle');
+  const dayMeta = document.getElementById('dayMeta');
+  const daySelect = document.getElementById('daySelect');
+  const todayBtn = document.getElementById('todayBtn');
+  const itemsEl = document.getElementById('items');
+  const hint = document.getElementById('hint');
+
+  const ICON_PLAY = '<path d="M8 5.5v13a1 1 0 0 0 1.53.85l10-6.5a1 1 0 0 0 0-1.7l-10-6.5A1 1 0 0 0 8 5.5z"/>';
+  const ICON_PAUSE = '<rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/>';
+
+  let current = null;
+  let mode = 'audio';
+  let ttsIndex = 0;
+  let ttsPlaying = false;
+  let ttsRate = 1;
+  let today = '';
+
+  const fmt = (s) => {
+    if (!isFinite(s) || s < 0) return '--:--';
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return m + ':' + String(sec).padStart(2, '0');
+  };
+
+  function setIcon(playing) {
+    playIcon.innerHTML = playing ? ICON_PAUSE : ICON_PLAY;
+    playBtn.setAttribute('aria-label', playing ? '暂停' : '播放');
+  }
+
+  async function getJSON(url) {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }
+
+  function render(data) {
+    current = data;
+    dayTitle.textContent = data.title || data.date;
+    const n = (data.items || []).length;
+    const mins = data.audio ? Math.round((data.duration || 0) / 60) : '';
+    dayMeta.textContent = n ? n + ' 条' + (mins ? ' · 约 ' + mins + ' 分钟' : '') : '暂无内容';
+
+    itemsEl.innerHTML = '';
+    (data.items || []).forEach((it) => {
+      const li = document.createElement('li');
+      const cat = document.createElement('span');
+      cat.className = 'cat';
+      cat.textContent = it.category || '综合';
+      const p = document.createElement('p');
+      p.className = 'txt';
+      p.textContent = it.content || '';
+      li.appendChild(cat);
+      li.appendChild(p);
+      itemsEl.appendChild(li);
+    });
+    if (!n) {
+      itemsEl.innerHTML = '<li class="empty">今天的内容还没生成，稍后再来看看。</li>';
+    }
+
+    resetPlayer();
+  }
+
+  function resetPlayer() {
+    stopTTS();
+    mode = 'audio';
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+    hint.textContent = '';
+    setIcon(false);
+    seek.value = 0;
+    curTime.textContent = '0:00';
+    durTime.textContent = '--:--';
+
+    if (current && current.audio) {
+      const saved = Number(localStorage.getItem('pos:' + current.date) || 0);
+      const applyMeta = () => {
+        durTime.textContent = fmt(audio.duration);
+        const n = (current.items || []).length;
+        const mins = Math.max(1, Math.round(audio.duration / 60));
+        if (n) dayMeta.textContent = n + ' 条 · 约 ' + mins + ' 分钟';
+        if (saved > 5 && saved < audio.duration - 10) {
+          audio.currentTime = saved;
+          hint.textContent = '已从上次位置继续';
+        }
+        updateMediaSession();
+      };
+      audio.addEventListener('loadedmetadata', applyMeta, { once: true });
+      audio.src = current.audio;
+      if (audio.readyState >= 1) {
+        audio.removeEventListener('loadedmetadata', applyMeta);
+        applyMeta();
+      }
+      audio.playbackRate = Number(localStorage.getItem('rate') || 1);
+      syncSpeedButtons();
+    } else {
+      mode = 'tts';
+      hint.textContent = '本次没有音频文件，将使用手机自带的语音朗读';
+    }
+  }
+
+  function updateMediaSession() {
+    if (!('mediaSession' in navigator) || !current) return;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: current.title || '每日读报',
+      artist: '每日读报',
+      album: current.date || ''
+    });
+    const handlers = {
+      play: () => start(),
+      pause: () => pause(),
+      seekbackward: () => { if (mode === 'audio') audio.currentTime = Math.max(0, audio.currentTime - 15); },
+      seekforward: () => { if (mode === 'audio') audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 15); },
+      seekto: (d) => { if (mode === 'audio' && d.seekTime != null) audio.currentTime = d.seekTime; }
+    };
+    Object.entries(handlers).forEach(([k, fn]) => {
+      try { navigator.mediaSession.setActionHandler(k, fn); } catch (e) {}
+    });
+  }
+
+  function start() {
+    if (!current) return;
+    if (mode === 'audio') {
+      audio.play().then(() => { setIcon(true); hint.textContent = ''; })
+        .catch(() => { hint.textContent = '点一下播放键即可开始'; });
+    } else {
+      startTTS();
+    }
+  }
+
+  function pause() {
+    if (mode === 'audio') {
+      audio.pause();
+      setIcon(false);
+    } else {
+      pauseTTS();
+    }
+  }
+
+  function toggle() {
+    const playing = mode === 'audio' ? !audio.paused : ttsPlaying;
+    playing ? pause() : start();
+  }
+
+  function startTTS() {
+    if (!window.speechSynthesis || !current) return;
+    const parts = (current.text || '').split(/\n+/).filter(Boolean);
+    if (!parts.length) return;
+    if (ttsIndex >= parts.length) ttsIndex = 0;
+    ttsPlaying = true;
+    setIcon(true);
+    const speakNext = () => {
+      if (!ttsPlaying || ttsIndex >= parts.length) {
+        ttsPlaying = false;
+        setIcon(false);
+        return;
+      }
+      const u = new SpeechSynthesisUtterance(parts[ttsIndex]);
+      u.lang = 'zh-CN';
+      u.rate = ttsRate;
+      u.onend = () => { ttsIndex += 1; speakNext(); };
+      u.onerror = () => { ttsPlaying = false; setIcon(false); };
+      speechSynthesis.speak(u);
+      curTime.textContent = '第 ' + (ttsIndex + 1) + ' / ' + parts.length + ' 段';
+    };
+    speakNext();
+  }
+
+  function pauseTTS() {
+    ttsPlaying = false;
+    if (window.speechSynthesis) speechSynthesis.cancel();
+    setIcon(false);
+  }
+
+  function stopTTS() {
+    ttsPlaying = false;
+    ttsIndex = 0;
+    if (window.speechSynthesis) speechSynthesis.cancel();
+  }
+
+  function syncSpeedButtons() {
+    const rate = mode === 'audio' ? audio.playbackRate : ttsRate;
+    document.querySelectorAll('#speeds button').forEach((b) => {
+      b.setAttribute('aria-pressed', String(Number(b.dataset.rate) === rate));
+    });
+  }
+
+  playBtn.addEventListener('click', toggle);
+  audio.addEventListener('play', () => setIcon(true));
+  audio.addEventListener('pause', () => setIcon(false));
+  audio.addEventListener('ended', () => { setIcon(false); localStorage.removeItem('pos:' + (current && current.date)); });
+  audio.addEventListener('timeupdate', () => {
+    if (!audio.duration) return;
+    curTime.textContent = fmt(audio.currentTime);
+    seek.value = String(Math.round((audio.currentTime / audio.duration) * 1000));
+    if (current) localStorage.setItem('pos:' + current.date, String(audio.currentTime));
+  });
+  seek.addEventListener('input', () => {
+    if (mode === 'audio' && audio.duration) {
+      audio.currentTime = (Number(seek.value) / 1000) * audio.duration;
+    }
+  });
+  document.getElementById('speeds').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-rate]');
+    if (!btn) return;
+    const rate = Number(btn.dataset.rate);
+    localStorage.setItem('rate', String(rate));
+    if (mode === 'audio') {
+      audio.playbackRate = rate;
+    } else {
+      ttsRate = rate;
+      if (ttsPlaying) { pauseTTS(); start(); }
+    }
+    syncSpeedButtons();
+  });
+
+  daySelect.addEventListener('change', () => loadDay(daySelect.value));
+  todayBtn.addEventListener('click', () => loadDay(today));
+
+  async function loadDay(day) {
+    const url = day === today ? 'data/latest.json' : 'data/archive/' + day + '.json';
+    try {
+      const data = await getJSON(url);
+      render(data);
+      daySelect.value = data.date;
+    } catch (e) {
+      hint.textContent = '这一天没有内容';
+    }
+  }
+
+  (async () => {
+    let latest = null;
+    try { latest = await getJSON('data/latest.json'); } catch (e) {}
+    if (!latest || !latest.date || !(latest.items || []).length) {
+      dayTitle.textContent = '暂无内容';
+      dayMeta.textContent = '今天的内容还没生成';
+      itemsEl.innerHTML = '<li class="empty">今天的内容还没生成，稍后再来看看。</li>';
+      daySelect.innerHTML = '<option>暂无</option>';
+      daySelect.disabled = true;
+      return;
+    }
+    today = latest.date;
+    render(latest);
+
+    let days = [latest.date];
+    try {
+      const idx = await getJSON('data/index.json');
+      if (idx && Array.isArray(idx.days) && idx.days.length) days = idx.days;
+    } catch (e) {}
+    daySelect.innerHTML = days.map((d) => '<option value="' + d + '">' + d + '</option>').join('');
+    daySelect.value = latest.date;
+
+    if (new URLSearchParams(location.search).get('play') === '1') {
+      setTimeout(start, 300);
+    }
+  })();
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>
