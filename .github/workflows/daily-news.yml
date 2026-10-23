@@ -2,7 +2,7 @@ name: daily-news-push
 
 on:
   schedule:
-    - cron: "30 23 * * *"
+    - cron: "20 21 * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   push:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,7 +23,32 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Wait for 07:25 Beijing time
+        run: |
+          python - <<'PY'
+          import time
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+
+          now = datetime.now(ZoneInfo("Asia/Shanghai"))
+          target = now.replace(hour=7, minute=25, second=0, microsecond=0)
+          wait = max(0.0, (target - now).total_seconds())
+          print(f"now={now:%Y-%m-%d %H:%M:%S} wait={wait:.0f}s", flush=True)
+          if wait > 0:
+              time.sleep(min(wait, 3 * 3600))
+          PY
+      - name: Check whether today's brief already went out
+        id: guard
+        run: |
+          TODAY=$(TZ=Asia/Shanghai date +%F)
+          if [ -f "docs/data/archive/$TODAY.json" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "already sent $TODAY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Push news to WeChat
+        if: steps.guard.outputs.skip != 'true'
         env:
           SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
           SERVERCHAN_SENDKEYS: ${{ secrets.SERVERCHAN_SENDKEYS }}
