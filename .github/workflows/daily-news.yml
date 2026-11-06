@@ -2,7 +2,8 @@ name: daily-news-push
 
 on:
   schedule:
-    - cron: "20 21 * * *"
+    - cron: "0 18 * * *"
+    - cron: "0 19 * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -15,7 +16,7 @@ concurrency:
 jobs:
   push:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,7 +36,7 @@ jobs:
           wait = max(0.0, (target - now).total_seconds())
           print(f"now={now:%Y-%m-%d %H:%M:%S} wait={wait:.0f}s", flush=True)
           if wait > 0:
-              time.sleep(min(wait, 3 * 3600))
+              time.sleep(min(wait, 5.5 * 3600))
           PY
       - name: Check whether today's brief already went out
         id: guard
